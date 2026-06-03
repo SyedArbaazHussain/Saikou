@@ -1,7 +1,10 @@
 package ani.saikou.parsers.manga
 
+import android.util.Log
 import ani.saikou.FileUrl
+import ani.saikou.Mapper
 import ani.saikou.client
+import ani.saikou.decryptTobeparsed
 import ani.saikou.parsers.MangaChapter
 import ani.saikou.parsers.MangaImage
 import ani.saikou.parsers.MangaParser
@@ -13,6 +16,8 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import java.net.URLEncoder
+import java.nio.charset.StandardCharsets
 
 @OptIn(InternalSerializationApi::class)
 class AllManga : MangaParser() {
@@ -22,22 +27,22 @@ class AllManga : MangaParser() {
 
     override val hostUrl: String = "https://api.allanime.day/api"
     private val posterBase = "https://wp.youtube-anime.com/aln.youtube-anime.com/"
-    private val imageReferer = "https://youtu-chan.com/"
+    private val imageReferer = "https://allmanga.to/"
 
     private val mapper = Json {
         ignoreUnknownKeys = true
         encodeDefaults = true
     }
     private val headers = mapOf(
-        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:147.0) Gecko/20100101 Firefox/147.0",
+
         "Accept" to "application/json",
         "Accept-Language" to "en-US,en;q=0.9",
         "Content-Type" to "application/json",
+        "Origin" to "https://allmanga.to"
     )
 
-    private fun buildQuery(queryAction: () -> String): String = queryAction()
-        .trimIndent()
-        .replace("%", "$")
+    private fun buildQuery(queryAction: () -> String): String =
+        queryAction().trimIndent().replace("%", "$")
 
     private val searchQuery = buildQuery {
         """
@@ -56,16 +61,16 @@ class AllManga : MangaParser() {
         }
         """
     }
-
-    private val pageQuery = buildQuery {
-        """
-        query (%id: String!, %translationType: VaildTranslationTypeMangaEnumType!, %chapterNum: String!) {
-            chapterPages(mangaId: %id, translationType: %translationType, chapterString: %chapterNum) {
-                edges { pictureUrlHead pictureUrls }
-            }
-        }
-        """
-    }
+//
+//    private val pageQuery = buildQuery {
+//        """
+//        query (%id: String!, %translationType: VaildTranslationTypeMangaEnumType!, %chapterNum: String!) {
+//            chapterPages(mangaId: %id, translationType: %translationType, chapterString: %chapterNum) {
+//                edges { pictureUrlHead pictureUrls }
+//            }
+//        }
+//        """
+//    }
 
     override suspend fun search(query: String): List<ShowResponse> = tryWithSuspend {
         if (query.isBlank()) return@tryWithSuspend emptyList<ShowResponse>()
@@ -85,19 +90,15 @@ class AllManga : MangaParser() {
             val title = it.englishName ?: it.name ?: it.nativeName ?: "Unknown"
             val compositeId = "${createSlug(it.name ?: it.englishName)}-${it._id}"
             ShowResponse(
-                name = title,
-                link = compositeId,
-                coverUrl = FileUrl(
-                    posterBase + (it.thumbnail ?: ""),
-                    mapOf("Referer" to "https://allmanga.to/")
+                name = title, link = compositeId, coverUrl = FileUrl(
+                    posterBase + (it.thumbnail ?: ""), mapOf("Referer" to "https://allmanga.to/")
                 )
             )
         } ?: emptyList()
     } ?: emptyList()
 
     override suspend fun loadChapters(
-        mangaLink: String,
-        extra: Map<String, String>?
+        mangaLink: String, extra: Map<String, String>?
     ): List<MangaChapter> = tryWithSuspend {
         val mediaId = mangaLink.substringAfterLast("-")
 
@@ -109,8 +110,7 @@ class AllManga : MangaParser() {
 
         response.data?.manga?.availableChaptersDetail?.sub?.map { rawChapterStr ->
             MangaChapter(
-                number = rawChapterStr,
-                link = "${mediaId}-chapter-$rawChapterStr"
+                number = rawChapterStr, link = "${mediaId}-chapter-$rawChapterStr"
             )
         }?.sortedBy { it.number.toFloatOrNull() ?: 0f } ?: emptyList()
     } ?: emptyList()
@@ -123,16 +123,67 @@ class AllManga : MangaParser() {
         val mangaId = match.groupValues[1]
         val chapterNumStr = match.groupValues[2]
 
-        val variables = PageVariables(mangaId, "sub", chapterNumStr)
-        val jsonBody = mapper.encodeToString(PageGraphQLRequest(pageQuery, variables))
-        val response = client.post(hostUrl, headers = headers, json = JsonAsString(jsonBody))
-            .parsed<PageResponse>()
+        Log.d("MANGA_API", "📥 Chapter: $chapterLink")
 
-        response.data?.chapterPages?.edges?.flatMap { edge ->
+        val variables = """
+        {
+          "mangaId":"$mangaId",
+          "translationType":"sub",
+          "chapterString":"$chapterNumStr",
+          "limit":100,
+          "offset":0
+        }
+    """.trimIndent()
+
+        val extensions = """
+        {
+          "persistedQuery":{
+            "version":1,
+            "sha256Hash":"466783e19a7540387e34265be906bebbe853857088d45d28af922ab8668ebb31"
+          }
+        }
+    """.trimIndent()
+
+        val url = buildString {
+            append(hostUrl)
+            append("?variables=")
+            append(encode(variables))
+            append("&extensions=")
+            append(encode(extensions))
+        }
+
+
+        val raw = client.get(url, headers = headers)
+
+
+
+        val parsed = raw.parsed<TobeparsedResponse>()
+
+        val encrypted = parsed.data?.tobeparsed
+            ?: return@tryWithSuspend emptyList<MangaImage>()
+
+
+
+
+        val decryptedJson = decryptTobeparsed(encrypted)
+
+
+
+
+        val response = Mapper.json.decodeFromString<PageResponse>(decryptedJson)
+
+
+        response.chapterPages.edges.flatMap { edge ->
             edge.pictureUrls.map { pic ->
-                MangaImage(FileUrl(edge.pictureUrlHead + pic.url, mapOf("Referer" to imageReferer)))
+                MangaImage(
+                    FileUrl(
+                        edge.pictureUrlHead + pic.url,
+                        mapOf("Referer" to imageReferer)
+                    )
+                )
             }
-        } ?: emptyList()
+        }
+
     } ?: emptyList()
 
 
@@ -144,8 +195,7 @@ class AllManga : MangaParser() {
 
     @Serializable
     data class DetailsGraphQLRequest(
-        @SerialName("query") val query: String,
-        @SerialName("variables") val variables: IdVariable
+        @SerialName("query") val query: String, @SerialName("variables") val variables: IdVariable
     )
 
     @Serializable
@@ -186,7 +236,9 @@ class AllManga : MangaParser() {
     data class DetailsResponse(val data: DetailsData? = null)
 
     @Serializable
-    data class PageResponse(val data: PageData? = null)
+    data class PageResponse(
+        val chapterPages: ChapterPages
+    )
 
     @Serializable
     data class SearchData(val mangas: MangaConnection? = null)
@@ -216,14 +268,29 @@ class AllManga : MangaParser() {
     data class PageData(val chapterPages: ChapterPages? = null)
 
     @Serializable
-    data class ChapterPages(val edges: List<PageEdge> = emptyList())
+    data class ChapterPages(val edges: List<Edge> = emptyList())
 
     @Serializable
-    data class PageEdge(val pictureUrlHead: String, val pictureUrls: List<PageImage> = emptyList())
+    data class Edge(
+        val pictureUrlHead: String,
+        val pictureUrls: List<PictureUrl>
+    )
+    @Serializable
+    data class PictureUrl(
+        val num: Int,
+        val url: String
+    )
 
     @Serializable
-    data class PageImage(val url: String)
+    data class TobeparsedResponse(
+        val data: InnerData? = null
+    )
 
+    @Serializable
+    data class InnerData(
+        val _m: String? = null,
+        val tobeparsed: String? = null
+    )
     private fun createSlug(text: String?): String =
         text?.lowercase()?.replace("[^a-z0-9]+".toRegex(), "-")?.trim('-') ?: "unknown"
 }

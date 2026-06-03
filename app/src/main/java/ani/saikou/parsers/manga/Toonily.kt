@@ -1,5 +1,7 @@
 package ani.saikou.parsers.manga
 
+import android.annotation.SuppressLint
+import android.util.Log
 import ani.saikou.FileUrl
 import ani.saikou.Mapper
 import ani.saikou.client
@@ -9,6 +11,7 @@ import ani.saikou.parsers.MangaParser
 import ani.saikou.parsers.ShowResponse
 import okhttp3.MultipartBody
 import kotlinx.serialization.Serializable
+import okhttp3.FormBody
 
 class Toonily : MangaParser() {
 
@@ -16,24 +19,41 @@ class Toonily : MangaParser() {
     override val saveName = "toonily"
     override val hostUrl = "https://toonily.com"
 
+    private val headers = mapOf(
+        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:147.0) Gecko/20100101 Firefox/147.0",
+
+        "Origin" to "https://toonily.com",
+        "Referer" to "https://toonily.com/"
+    )
     override suspend fun search(query: String): List<ShowResponse> {
-        val requestBody = MultipartBody.Builder().setType(MultipartBody.FORM)
-            .addFormDataPart("action", "ajaxsearchpro_search")
-            .addFormDataPart("aspp", query)
-            .addFormDataPart("asid", "1")
-            .addFormDataPart("asp_inst_id", "1_1")
-            .addFormDataPart("options", "customset[]=wp-manga&asp_gen[]=content&asp_gen[]=title&filters_initial=1&filters_changed=0&qtranslate_lang=0&current_page_id=12")
+        val requestBody = FormBody.Builder()
+            .add("action", "wp-manga-search-manga")
+            .add("title", query)
             .build()
-        val resp = client.post("$hostUrl/wp-admin/admin-ajax.php", requestBody = requestBody).text
-        val jsonString = resp.substringAfter("ASPSTART_DATA___").substringBefore("___ASPEND_DATA")
-        val json = Mapper.parse<SearchResponse>(jsonString)
-        return json.results.map { manga ->
-            ShowResponse(
-                name = manga.title,
-                link = manga.link,
-                // TODO: Get better cover URL
-                coverUrl = manga.image,
-            )
+
+        val url = "$hostUrl/wp-admin/admin-ajax.php"
+
+
+        val response = client.post(url, requestBody = requestBody, headers = headers)
+
+        val status = response.code
+        val body = response.body?.string().orEmpty()
+
+        if (status != 200 || body.isBlank()) return emptyList()
+
+        return runCatching {
+            val json = Mapper.parse<SearchResponse>(body)
+
+            return json.data.map { item ->
+                ShowResponse(
+                    name = item.label,
+                    link = item.url,
+                    coverUrl = item.thumbnail ?: ""
+                )
+            }
+        }.getOrElse {
+
+            emptyList()
         }
     }
 
@@ -53,6 +73,7 @@ class Toonily : MangaParser() {
 
     override suspend fun loadImages(chapterLink: String): List<MangaImage> {
         val doc = client.get(chapterLink).document
+
         return doc.select("div.reading-content > div > img").map { element ->
             MangaImage(
                 url = FileUrl(
@@ -60,19 +81,24 @@ class Toonily : MangaParser() {
                     headers = mapOf("referer" to "$hostUrl/")
                 )
             )
+
         }
     }
 
 
+
+    @SuppressLint("UnsafeOptInUsageError")
     @Serializable
     data class SearchResponse(
-        val results: List<MangaSearchResult>
+        val success: Boolean,
+        val data: List<SearchItem>
     ) {
         @Serializable
-        data class MangaSearchResult(
-            val title: String,
-            val image: String,
-            val link: String,
+        data class SearchItem(
+            val label: String,
+            val value: String,
+            val url: String,
+            val thumbnail: String? = null
         )
     }
 }

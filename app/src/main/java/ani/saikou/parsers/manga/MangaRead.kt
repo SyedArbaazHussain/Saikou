@@ -1,5 +1,6 @@
 package ani.saikou.parsers.manga
 
+import android.util.Log
 import ani.saikou.client
 import ani.saikou.parsers.MangaChapter
 import ani.saikou.parsers.MangaImage
@@ -38,11 +39,17 @@ class MangaRead: MangaParser() {
         }
     }
 
+
     override suspend fun loadImages(chapterLink: String): List<MangaImage> {
         val doc = client.get(chapterLink).document
-        val imgs = doc.select("div.reading-content > div > img")
-        return imgs.map {
-            MangaImage(url = it.attr("data-src").trim())
+
+        val images = doc.select("div.reading-content img.wp-manga-chapter-img")
+
+        return images.mapIndexed { index, img ->
+
+            val actualUrl = img.attr("src").trim()
+
+            MangaImage(url = actualUrl)
         }
     }
 

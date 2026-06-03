@@ -60,7 +60,11 @@ import java.lang.Runnable
 import java.lang.reflect.Field
 import java.util.*
 import kotlin.math.*
-
+import android.util.Base64
+import javax.crypto.Cipher
+import javax.crypto.spec.GCMParameterSpec
+import javax.crypto.spec.SecretKeySpec
+import java.security.MessageDigest
 
 var statusBarHeight = 0
 var navBarHeight = 0
@@ -939,4 +943,51 @@ suspend fun View.pop() {
         ObjectAnimator.ofFloat(this@pop, "scaleY", 1.25f, 1f).setDuration(100).start()
     }
     delay(100)
+}
+
+
+
+fun decryptTobeparsed(base64Payload: String): String {
+    val SECRET = "Xot36i3lK3"
+    val IV = 12
+    val TAG = 16
+
+    val blob = Base64.decode(base64Payload, Base64.DEFAULT)
+
+    if (blob.size < 13) {
+        throw IllegalArgumentException("Invalid payload")
+    }
+
+
+    val version = blob[0].toInt()
+
+
+    val iv = blob.copyOfRange(1, 1 + IV)
+
+
+    val encrypted = blob.copyOfRange(13, blob.size)
+
+
+    val tag = encrypted.copyOfRange(encrypted.size - TAG, encrypted.size)
+    val ciphertext = encrypted.copyOfRange(0, encrypted.size - TAG)
+
+
+    val keyBytes = MessageDigest.getInstance("SHA-256")
+        .digest("$SECRET:v$version".toByteArray(Charsets.UTF_8))
+
+    val secretKey = SecretKeySpec(keyBytes, "AES")
+
+
+    val cipherInput = ByteArray(ciphertext.size + tag.size)
+    System.arraycopy(ciphertext, 0, cipherInput, 0, ciphertext.size)
+    System.arraycopy(tag, 0, cipherInput, ciphertext.size, tag.size)
+
+    val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+    val spec = GCMParameterSpec(128, iv)
+
+    cipher.init(Cipher.DECRYPT_MODE, secretKey, spec)
+
+    val decrypted = cipher.doFinal(cipherInput)
+
+    return String(decrypted, Charsets.UTF_8)
 }

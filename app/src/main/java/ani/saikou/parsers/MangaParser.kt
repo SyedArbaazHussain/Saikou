@@ -29,20 +29,34 @@ abstract class MangaParser : BaseParser() {
      * **/
     abstract suspend fun loadImages(chapterLink: String): List<MangaImage>
 
-    override suspend fun autoSearch(mediaObj: Media): ShowResponse? {
-        var response = loadSavedShowResponse(mediaObj.id)
-        if (response != null) {
-            saveShowResponse(mediaObj.id, response, true)
-        } else {
-            setUserText("Searching : ${mediaObj.mangaName()}")
-            response = search(mediaObj.mangaName()).let { if (it.isNotEmpty()) it[0] else null }
+//    override suspend fun autoSearch(mediaObj: Media): ShowResponse? {
+//        var response = loadSavedShowResponse(mediaObj.id)
+//        if (response != null) {
+//            saveShowResponse(mediaObj.id, response, true)
+//        } else {
+//            setUserText("Searching : ${mediaObj.mangaName()}")
+//            response = search(mediaObj.mangaName()).let { if (it.isNotEmpty()) it[0] else null }
+//
+//            if (response == null) {
+//                setUserText("Searching : ${mediaObj.nameRomaji}")
+//                response = search(mediaObj.nameRomaji).let { if (it.isNotEmpty()) it[0] else null }
+//            }
+//            saveShowResponse(mediaObj.id, response)
+//        }
+//        return response
+//    }
 
-            if (response == null) {
-                setUserText("Searching : ${mediaObj.nameRomaji}")
-                response = search(mediaObj.nameRomaji).let { if (it.isNotEmpty()) it[0] else null }
-            }
-            saveShowResponse(mediaObj.id, response)
+    override suspend fun autoSearch(mediaObj: Media): ShowResponse? {
+        setUserText("Searching : ${mediaObj.mangaName()}")
+        var response = search(mediaObj.mangaName()).firstOrNull()
+
+        if (response == null) {
+            setUserText("Searching : ${mediaObj.nameRomaji}")
+            response = search(mediaObj.nameRomaji).firstOrNull()
         }
+
+//        saveShowResponse(mediaObj.id, response)
+        setUserText("Found : ${response?.name}")
         return response
     }
 
