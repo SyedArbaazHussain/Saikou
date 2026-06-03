@@ -2,4 +2,4 @@
 
 ### Enhancements
 
-* Search: Improve search for manga providers 
+* Search: Improve auto search for manga providers 

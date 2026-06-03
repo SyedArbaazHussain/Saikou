@@ -184,8 +184,6 @@ query FetchChapterPages(%slugId: String!, %chapterNumber: Float!) {
                 json = JsonAsString(jsonBody)
             ).text
 
-            Log.d("MANGAHUB_DEBUG", "📥 Raw Chapters Response: $rawResponseString")
-
             val response = mapper.decodeFromString<ChaptersResponse>(rawResponseString)
 
             response.data?.chaptersByManga?.map { chapter ->
