@@ -11,6 +11,7 @@ import ani.saikou.parsers.ShowResponse
 import kotlinx.serialization.InternalSerializationApi
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -31,27 +32,36 @@ class MangaBuddy : MangaParser() {
         "Referer" to "$hostUrl/"
     )
 
-
     override suspend fun search(query: String): List<ShowResponse> {
 
-        val encodedQuery = encode(query)
-        val url = "$apiUrl/titles/search?q=$encodedQuery&limit=24"
+        val url = "$apiUrl/titles/search?exclude=yaoi&page=1&limit=7&q=$query"
 
         return try {
+
             val response = client.get(url)
-            val body = response.body.string()
-            val res = json.decodeFromString<SearchResponse>(body ?: "")
-            res.data.items.map {
+            val bodyText = response.body.string()
+            if (bodyText.isBlank()) {
+                return emptyList()
+            }
+
+            val res = try {
+                json.decodeFromString<SearchResponse>(bodyText)
+            } catch (e: Exception) {
+                return emptyList()
+            }
+
+            val results = res.data.items.mapIndexed { index, it ->
                 ShowResponse(
                     name = it.name,
                     link = it.id,
                     coverUrl = FileUrl(
                         url = it.cover,
                         headers = headers
-
                     )
                 )
             }
+
+            results
         } catch (e: Exception) {
             emptyList()
         }
@@ -68,12 +78,6 @@ class MangaBuddy : MangaParser() {
             val response = client.get(url)
             val body = response.body.string()
             val res = json.decodeFromString<ChapterResponse>(body ?: "")
-            res.data.chapters.forEachIndexed { index, ch ->
-                Log.d(
-                    "MangaBuddy",
-                    "[$index] name=${ch.name}, number=${ch.chapterNumber}, url=${ch.url}"
-                )
-            }
 
             val sorted = res.data.chapters
                 .sortedBy { it.chapterNumber ?: Float.MAX_VALUE }
@@ -96,42 +100,53 @@ class MangaBuddy : MangaParser() {
     override suspend fun loadImages(chapterLink: String): List<MangaImage> {
 
         return try {
-
             val url = if (chapterLink.startsWith("http")) {
                 chapterLink
             } else {
                 "$hostUrl$chapterLink"
             }
 
-            val response = client.get(url)
 
+            val response = client.get(url)
             val body = response.body.string()
 
-            if (body.isBlank()) return emptyList()
-
-            val jsonStart = body.indexOf("<script id=\"__NEXT_DATA__\"")
-            if (jsonStart == -1) {
-                Log.e("MangaBuddy", "__NEXT_DATA__ not found")
+            if (body.isBlank()) {
                 return emptyList()
             }
+
+            val jsonStart = body.indexOf("<script id=\"__NEXT_DATA__\"")
+
+            if (jsonStart == -1) {
+                return emptyList()
+            }
+
             val jsonStartTag = body.indexOf(">", jsonStart) + 1
             val jsonEndTag = body.indexOf("</script>", jsonStartTag)
 
-            val jsonString = body.substring(jsonStartTag, jsonEndTag)
+            if (jsonStartTag <= 0 || jsonEndTag <= 0) {
+                return emptyList()
+            }
 
-            val root = json.decodeFromString<Map<String, kotlinx.serialization.json.JsonElement>>(jsonString)
+            val jsonString = body.substring(jsonStartTag, jsonEndTag)
+            val root = json.decodeFromString<Map<String, JsonElement>>(jsonString)
+
 
             val pageProps = root["props"]
                 ?.jsonObject
                 ?.get("pageProps")
                 ?.jsonObject
 
-            val initialChapter = pageProps
-                ?.get("initialChapter")
-                ?.jsonObject
+            if (pageProps == null) {
+                return emptyList()
+            }
 
-            val images = initialChapter
-                ?.get("images")
+            val initialChapter = pageProps["initialChapter"]?.jsonObject
+
+            if (initialChapter == null) {
+                return emptyList()
+            }
+
+            val images = initialChapter["images"]
                 ?.jsonArray
                 ?.map { it.jsonPrimitive.content }
 
@@ -139,7 +154,15 @@ class MangaBuddy : MangaParser() {
                 return emptyList()
             }
 
-            return images.map { MangaImage(FileUrl(it, headers)) }
+            val result = images.mapIndexed { index, it ->
+
+                MangaImage(
+                    FileUrl(it, headers)
+                )
+            }
+
+
+            result
 
         } catch (e: Exception) {
             emptyList()

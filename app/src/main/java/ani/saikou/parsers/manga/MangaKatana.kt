@@ -13,6 +13,7 @@ class MangaKatana : MangaParser() {
     override val hostUrl = "https://mangakatana.com"
 
     override suspend fun search(query: String): List<ShowResponse> {
+
         val doc = client.get("$hostUrl/?search=${encode(query)}").document
         val mediaData = doc.select("#book_list div.media div.wrap_img a")
         val titleData = doc.select("#book_list div.text h3 a")

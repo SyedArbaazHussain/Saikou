@@ -28,78 +28,42 @@ class WeebCentral : MangaParser() {
         if (query.isBlank()) return emptyList()
 
         return try {
-            val limit = 32
-            val offset = 0
-            val searchUrl = "$hostUrl/search/data"
-
-            val hxCurrentUrl =
-                "$hostUrl/search?text=${encode(query)}" + "&sort=Best+Match&order=Descending&official=Any&anime=Any&adult=Any&display_mode=Full+Display"
-
-            val headers = commonHeaders + mapOf(
-                "HX-Request" to "true",
-                "HX-Current-URL" to hxCurrentUrl
-            )
-            val html = client.get(
-                searchUrl,
-                headers = headers,
-                params = mapOf(
-                    "limit" to limit.toString(),
-                    "offset" to offset.toString(),
-                    "text" to query,
-                    "sort" to "Best Match",
-                    "order" to "Descending",
-                    "official" to "Any",
-                    "anime" to "Any",
-                    "adult" to "Any",
-                    "display_mode" to "Full Display"
+            val response = client.post(
+                url = "$hostUrl/search/simple?location=main",
+                data = mapOf("text" to query),
+                headers = mapOf(
+                    "HX-Request" to "true",
+                    "HX-Trigger" to "quick-search-input",
+                    "HX-Trigger-Name" to "text",
+                    "HX-Target" to "quick-search-result",
+                    "HX-Current-URL" to "$hostUrl/"
                 )
-            ).text
+            )
 
-            val results = mutableListOf<ShowResponse>()
-            val cardSeparator = "bg-base-300"
-            val items = html.split(cardSeparator)
+            val doc = response.document
 
-            for (i in 1 until items.size) {
-                val block = items[i]
+            doc.select("a[href*=/series/]").map { element ->
+                val href = element.attr("href")
 
-                val href = block.substringAfter("href=\"", "").substringBefore("\"")
-                if (href.isBlank() || !href.contains("/series/")) {
-                    continue
-                }
-                val seriesId = href.substringAfter("/series/")
+                val title = element
+                    .selectFirst("div.flex-1")
+                    ?.text()
+                    ?.trim()
+                    .orEmpty()
 
-                var title = block.substringAfter("class=\"text-ellipsis truncate\">", "")
-                    .substringBefore("</div>").trim()
-                if (title.isBlank() || title.contains("<") || title.length > 150) {
-                    title = block.substringAfter("/series/$seriesId\">", "").substringBefore("</a>")
-                        .trim()
-                }
-                if (title.contains(">")) {
-                    title = title.substringAfterLast(">").trim()
-                }
+                val cover = element
+                    .selectFirst("img")
+                    ?.attr("src")
+                    .orEmpty()
 
-                if (title.isBlank() || title.contains("<")) {
-                    title = seriesId.substringAfter("/").replace("-", " ").trim()
-                }
-
-                var coverUrl = block.substringAfter("src=\"", "").substringBefore("\"")
-                if (coverUrl.isBlank() || coverUrl.contains("data:") || !coverUrl.startsWith("http")) {
-                    val alternativeSrc = block.substringAfter("srcset=\"", "").substringBefore(" ")
-                    if (alternativeSrc.isNotBlank() && alternativeSrc.startsWith("http")) {
-                        coverUrl = alternativeSrc
-                    }
-                }
-                results.add(
-                    ShowResponse(
-                        name = title,
-                        link = seriesId,
-                        coverUrl = coverUrl
-                    )
+                ShowResponse(
+                    name = title,
+                    link = href.substringAfter("/series/"),
+                    coverUrl = cover
                 )
             }
-
-            results
         } catch (e: Exception) {
+
             emptyList()
         }
     }
@@ -114,69 +78,57 @@ class WeebCentral : MangaParser() {
             val mangaId = mangaLink.substringBefore("/")
             val targetUrl = "$hostUrl/series/$mangaId/full-chapter-list"
 
-
             val headers = commonHeaders + mapOf(
                 "Referer" to "$hostUrl/series/$mangaLink",
                 "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
             )
 
-            val html = client.get(targetUrl, headers = headers).text
-            val chaptersList = mutableListOf<MangaChapter>()
+            val response = client.get(targetUrl, headers = headers)
 
-            val separator = "href=\"https://weebcentral.com/chapters/"
-            val chunks = html.split(separator)
+            val doc = response.document
+
+            val links = doc.select("a[href*=/chapters/]")
+
             val chapNumRe = Regex("""(?i)Chapter\s*(\d+(?:\.\d+)?)""")
             val fallbackNumRe = Regex("""\d+(?:\.\d+)?""")
 
-            for (i in 1 until chunks.size) {
-                val chunk = chunks[i]
-                val chapterId = chunk.substringBefore("\"")
-                val rowContent = chunk.substringBefore("</tr>")
+            val chapters = links.mapIndexedNotNull { index, el ->
 
-                var cleanText = ""
-                var inTag = false
-                for (char in rowContent) {
-                    if (char == '<') {
-                        inTag = true; continue
-                    }
-                    if (char == '>') {
-                        inTag = false; cleanText += " "; continue
-                    }
-                    if (!inTag) {
-                        cleanText += char
-                    }
-                }
+                val href = el.attr("href")
+                val chapterId = href.substringAfter("/chapters/")
+                val text = el.text().replace(Regex("\\s+"), " ").trim()
 
-                val normalizedText = cleanText.replace(Regex("\\s+"), " ").trim()
 
-                var chapterNumber = chapNumRe.find(normalizedText)?.groupValues?.get(1)
-                if (chapterNumber == null) {
-                    chapterNumber = fallbackNumRe.find(normalizedText)?.value ?: "$i"
-                }
+                val chapterNumber =
+                    chapNumRe.find(text)?.groupValues?.get(1)
+                        ?: fallbackNumRe.find(text)?.value
+                        ?: chapterId
 
-                chaptersList.add(
-                    MangaChapter(
-                        number = chapterNumber,
-                        link = chapterId
-                    )
+                MangaChapter(
+                    number = chapterNumber,
+                    link = chapterId
                 )
-            }
-            chaptersList.reversed()
+            }.reversed()
+
+
+            chapters
+
         } catch (e: Exception) {
+
             emptyList()
         }
     }
 
     override suspend fun loadImages(chapterLink: String): List<MangaImage> {
-        if (chapterLink.isBlank()) {
-            return emptyList()
-        }
+        if (chapterLink.isBlank()) return emptyList()
 
         return try {
             val targetUrl = "$hostUrl/chapters/$chapterLink/images"
-            val headers = commonHeaders + mapOf("Referer" to "$hostUrl/")
 
-            val html = client.get(
+            val headers = commonHeaders + mapOf(
+                "Referer" to "$hostUrl/"
+            )
+            val response = client.get(
                 targetUrl,
                 headers = headers,
                 params = mapOf(
@@ -184,37 +136,45 @@ class WeebCentral : MangaParser() {
                     "current_page" to "1",
                     "reading_style" to "long_strip"
                 )
-            ).text
+            )
 
-            html.split("<img")
-                .drop(1)
-                .map { chunk -> chunk.substringBefore(">") }
-                .map { tag ->
-                    var imgUrl = tag.substringAfter("src=\"", "").substringBefore("\"")
-                    if (imgUrl.isBlank() || imgUrl.contains("<") || imgUrl.contains("data:")) {
-                        imgUrl = tag.substringAfter("data-src=\"", "").substringBefore("\"")
-                    }
-                    imgUrl.replace("&amp;", "&").trim()
+            val doc = response.document
+            val imgElements = doc.select("img, source")
+            val images = imgElements.mapIndexedNotNull { index, el ->
+
+                val raw =
+                    el.attr("src").ifBlank { el.attr("data-src") }
+                        .ifBlank { el.attr("data-original") }
+                        .ifBlank { el.attr("srcset").substringBefore(" ") }
+
+                val url = raw.replace("&amp;", "&").trim()
+
+                if (url.isBlank()) {
+                    return@mapIndexedNotNull null
                 }
-                .filter { url ->
-                    url.isNotBlank() && (
-                            url.contains(".jpg", ignoreCase = true) ||
-                                    url.contains(".png", ignoreCase = true) ||
-                                    url.contains(".webp", ignoreCase = true)
-                            )
+
+                if (!url.startsWith("http")) {
+                    return@mapIndexedNotNull null
                 }
-                .map { validUrl ->
-                    MangaImage(
-                        url = FileUrl(
-                            url = validUrl, headers = mapOf(
-                                "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:147.0) Gecko/20100101 Firefox/147.0",
-                                "Referer" to "${hostUrl}/"
-                            )
+
+                if (!url.contains(Regex("""\.(jpg|png|webp|jpeg)""", RegexOption.IGNORE_CASE))) {
+                    return@mapIndexedNotNull null
+                }
+                MangaImage(
+                    url = FileUrl(
+                        url = url,
+                        headers = mapOf(
+                            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:147.0) Gecko/20100101 Firefox/147.0",
+                            "Referer" to "$hostUrl/"
                         )
                     )
-                }
+                )
+            }
+
+            images
 
         } catch (e: Exception) {
+
             emptyList()
         }
     }
